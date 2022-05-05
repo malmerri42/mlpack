@@ -188,6 +188,12 @@ class LinearSVMFunction
   //! The datapoints for training.
   MatType dataset;
 
+  //! The column of class weights
+  arma::Col<double> classWeight;
+
+  //! The classweight per data points
+  arma::mat classWeightPoints;
+
   //! Number of Classes.
   size_t numClasses;
 

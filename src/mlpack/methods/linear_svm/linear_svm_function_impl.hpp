@@ -20,6 +20,7 @@
 // In case it hasn't been included yet.
 #include "linear_svm_function.hpp"
 
+
 namespace mlpack {
 namespace svm {
 
@@ -42,6 +43,14 @@ LinearSVMFunction<MatType>::LinearSVMFunction(
 
   // Calculate the label matrix.
   GetGroundTruthMatrix(labels, groundTruth);
+
+  // Calculate the class weights
+  arma::Col<double> tempCol = groundTruth * arma::ones<arma::mat>(groundTruth.n_cols,1);
+  classWeight = 1 / (tempCol/tempCol.min()) ;
+
+  classWeightPoints = classWeight.t() * groundTruth;
+
+   
 }
 
 /**
@@ -179,12 +188,15 @@ double LinearSVMFunction<MatType>::Evaluate(
   //  - Adding the margin parameter `delta`.
   //  - Removing the `delta` parameter from correct class label in each
   //    column.
-  arma::mat margin = scores - (arma::repmat(arma::ones(numClasses).t()
+  //
+  // The class weights applied
+  arma::mat margin =    scores - (arma::repmat(arma::ones(numClasses).t()
       * (scores % groundTruth), numClasses, 1)) + delta
-      - (delta * groundTruth);
+      - (delta * groundTruth) ;
+
 
   // The Hinge Loss Function
-  loss = arma::accu(arma::clamp(margin, 0.0, DBL_MAX)) / dataset.n_cols;
+  loss = arma::accu(arma::clamp(arma::repmat(classWeightPoints,margin.n_rows,1) % margin, 0.0, DBL_MAX)) / arma::accu(classWeightPoints);
 
   // Adding the regularization term.
   regularization = 0.5 * lambda * arma::dot(parameters, parameters);
@@ -219,9 +231,10 @@ double LinearSVMFunction<MatType>::Evaluate(
         dataset.n_cols);
   }
 
-  arma::mat margin = scores - (arma::repmat(arma::ones(numClasses).t()
-      * (scores % groundTruth.cols(firstId, lastId)), numClasses, 1))
-      + delta - (delta * groundTruth.cols(firstId, lastId));
+  arma::mat margin = ( ( scores - (arma::repmat(arma::ones(numClasses).t()
+      * (scores % groundTruth.cols(firstId, lastId)), numClasses, 1)) )
+      + delta - (delta * groundTruth.cols(firstId, lastId)) );
+
 
   // The Hinge Loss Function
   loss = arma::accu(arma::clamp(margin, 0.0, DBL_MAX));
@@ -259,17 +272,21 @@ void LinearSVMFunction<MatType>::Gradient(
         dataset.n_cols);
   }
 
-  arma::mat margin = scores - (arma::repmat(arma::ones(numClasses).t()
-      * (scores % groundTruth), numClasses, 1)) + delta
-      - (delta * groundTruth);
+  // The class weights applied
+  arma::mat margin = arma::repmat(classWeightPoints,groundTruth.n_rows,1) % ( ( scores - (arma::repmat(arma::ones(numClasses).t()
+      * (scores % groundTruth), numClasses, 1)) ) + delta
+      - (delta * groundTruth) ) ;
+
 
   // An element of `mask` matrix holds `1` corresponding to
   // each positive element of `margin` matrix.
+  // in other words, 1 for a missclassification
   arma::mat mask = margin.for_each([](arma::mat::elem_type& val)
       { val = (val > 0) ? 1: 0; });
 
-  arma::mat difference = groundTruth
-      % (-arma::repmat(arma::sum(mask), numClasses, 1)) + mask;
+  //scale the difference based on CLASS weights
+  arma::mat difference = (arma::repmat(classWeightPoints,numClasses,1)) % (groundTruth
+      % (-arma::repmat(arma::sum(mask), numClasses, 1)) + mask);
 
   // The gradient is evaluated as follows:
   //  - Add `x_i` to `w_j` if `margin_i_m`is positive.
@@ -292,7 +309,7 @@ void LinearSVMFunction<MatType>::Gradient(
         arma::ones<arma::rowvec>(dataset.n_cols) * difference.t();
   }
 
-  gradient /= dataset.n_cols;
+  gradient /= arma::accu(classWeightPoints)/*dataset.n_cols*/;
 
   // Adding the regularization contribution to the gradient.
   gradient += lambda * parameters;
@@ -323,9 +340,10 @@ void LinearSVMFunction<MatType>::Gradient(
         + arma::repmat(parameters.row(dataset.n_rows).t(), 1, batchSize);
   }
 
-  arma::mat margin = scores - (arma::repmat(arma::ones(numClasses).t()
-      * (scores % groundTruth.cols(firstId, lastId)), numClasses, 1))
-      + delta - (delta * groundTruth.cols(firstId, lastId));
+  arma::mat margin = ( ( scores - (arma::repmat(arma::ones(numClasses).t()
+      * (scores % groundTruth.cols(firstId, lastId)), numClasses, 1)) )
+      + delta - (delta * groundTruth.cols(firstId, lastId)) );
+
 
   // For each sample, find the total number of classes where
   // ( margin > 0 ).
@@ -377,9 +395,11 @@ double LinearSVMFunction<MatType>::EvaluateWithGradient(
         dataset.n_cols);
   }
 
-  arma::mat margin = scores - (arma::repmat(arma::ones(numClasses).t()
-      * (scores % groundTruth), numClasses, 1)) + delta
-      - (delta * groundTruth);
+  // The class weights applied
+  arma::mat margin = arma::repmat(classWeightPoints,groundTruth.n_rows,1) % ( ( scores - (arma::repmat(arma::ones(numClasses).t()
+      * (scores % groundTruth), numClasses, 1)) ) + delta
+      - (delta * groundTruth) );
+
 
   // For each sample, find the total number of classes where
   // ( margin > 0 ).
@@ -403,14 +423,14 @@ double LinearSVMFunction<MatType>::EvaluateWithGradient(
             arma::ones<arma::rowvec>(dataset.n_cols) * difference.t();
   }
 
-  gradient /= dataset.n_cols;
+  gradient /= arma::accu(classWeightPoints);
 
   // Adding the regularization contribution to the gradient.
   gradient += lambda * parameters;
 
   // The Hinge Loss Function
   loss = arma::accu(arma::clamp(margin, 0.0, DBL_MAX));
-  loss /= dataset.n_cols;
+  loss /= arma::accu(classWeightPoints);
 
   // Adding the regularization term.
   regularization = 0.5 * lambda * arma::dot(parameters, parameters);
@@ -447,9 +467,11 @@ double LinearSVMFunction<MatType>::EvaluateWithGradient(
         + arma::repmat(parameters.row(dataset.n_rows).t(), 1, dataset.n_cols);
   }
 
-  arma::mat margin = scores - (arma::repmat(arma::ones(numClasses).t()
-      * (scores % groundTruth.cols(firstId, lastId)), numClasses, 1))
-      + delta - (delta * groundTruth.cols(firstId, lastId));
+  // The class weights applied
+  arma::mat margin = arma::diagmat(classWeight) * ( (scores - (arma::repmat(arma::ones(numClasses).t()
+      * (scores % groundTruth.cols(firstId, lastId)), numClasses, 1)) )
+      + delta - (delta * groundTruth.cols(firstId, lastId)) );
+  
 
   // For each sample, find the total number of classes where
   // ( margin > 0 ).
